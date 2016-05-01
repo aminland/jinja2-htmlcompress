@@ -1,4 +1,5 @@
-# -*- coding: utf-8 -*-
+#!/usr/bin/env python
+# coding=utf-8
 """
     jinja2htmlcompress
     ~~~~~~~~~~~~~~~~~~
@@ -41,12 +42,16 @@ def _make_dict_from_listing(listing):
 
 class HTMLCompress(Extension):
     isolated_elements = set(['script', 'style', 'noscript', 'textarea'])
-    void_elements = set(['br', 'img', 'area', 'hr', 'param', 'input',
-                         'embed', 'col'])
-    block_elements = set(['div', 'p', 'form', 'ul', 'ol', 'li', 'table', 'tr',
-                          'tbody', 'thead', 'tfoot', 'tr', 'td', 'th', 'dl',
-                          'dt', 'dd', 'blockquote', 'h1', 'h2', 'h3', 'h4',
-                          'h5', 'h6', 'pre'])
+    void_elements = set([
+        'br', 'img', 'area', 'hr', 'param', 'input', 'embed', 'col',
+        'meta', 'link',
+    ])
+    block_elements = set([
+        'div', 'p', 'form', 'ul', 'ol', 'li', 'table', 'tr',
+        'tbody', 'thead', 'tfoot', 'tr', 'td', 'th', 'dl',
+        'dt', 'dd', 'blockquote', 'h1', 'h2', 'h3', 'h4',
+        'h5', 'h6', 'pre',
+    ])
     breaking_rules = _make_dict_from_listing([
         (['p'], set(['#block'])),
         (['li'], set(['li'])),
@@ -82,7 +87,7 @@ class HTMLCompress(Extension):
             return
         for idx, other_tag in enumerate(reversed(ctx.stack)):
             if other_tag == tag:
-                for num in xrange(idx + 1):
+                for num in range(idx + 1):
                     ctx.stack.pop()
             elif not self.breaking_rules.get(other_tag):
                 break
@@ -90,15 +95,16 @@ class HTMLCompress(Extension):
     def normalize(self, ctx):
         pos = 0
         buffer = []
-        def write_data(value):
+        def write_data(value, strip = str.strip):
             if not self.is_isolated(ctx.stack):
-                value = _ws_normalize_re.sub(' ', value.strip())
+                if strip is not None: value = strip(value)
+                value = _ws_normalize_re.sub(' ', value)
             buffer.append(value)
 
         for match in _tag_re.finditer(ctx.token.value):
             closes, tag, sole = match.groups()
             preamble = ctx.token.value[pos:match.start()]
-            write_data(preamble)
+            write_data(preamble, str.strip if pos > 0 else str.rstrip)
             if sole:
                 write_data(sole)
             else:
@@ -106,7 +112,7 @@ class HTMLCompress(Extension):
                 (closes and self.leave_tag or self.enter_tag)(tag, ctx)
             pos = match.end()
 
-        write_data(ctx.token.value[pos:])
+        write_data(ctx.token.value[pos:], str.lstrip if pos > 0 else None)
         return u''.join(buffer)
 
     def filter_stream(self, stream):
@@ -147,46 +153,4 @@ class SelectiveHTMLCompress(HTMLCompress):
                 yield Token(stream.current.lineno, 'data', value)
             else:
                 yield stream.current
-            stream.next()
-
-
-def test():
-    from jinja2 import Environment
-    env = Environment(extensions=[HTMLCompress])
-    tmpl = env.from_string('''
-        <html>
-          <head>
-            <title>{{ title }}</title>
-          </head>
-          <script type=text/javascript>
-            if (foo < 42) {
-              document.write('Foo < Bar');
-            }
-          </script>
-          <body>
-            <li><a href="{{ href }}">{{ title }}</a><br>Test   Foo
-            <li><a href="{{ href }}">{{ title }}</a><img src=test.png>
-          </body>
-        </html>
-    ''')
-    print tmpl.render(title=42, href='index.html')
-
-    env = Environment(extensions=[SelectiveHTMLCompress])
-    tmpl = env.from_string('''
-        Normal   <span>  unchanged </span> stuff
-        {% strip %}Stripped <span class=foo  >   test   </span>
-        <a href="foo">  test </a> {{ foo }}
-        Normal <stuff>   again {{ foo }}  </stuff>
-        <p>
-          Foo<br>Bar
-          Baz
-        <p>
-          Moep    <span>Test</span>    Moep
-        </p>
-        {% endstrip %}
-    ''')
-    print tmpl.render(foo=42)
-
-
-if __name__ == '__main__':
-    test()
+            next(stream)
