@@ -16,8 +16,9 @@ from jinja2.lexer import Token, describe_token
 from jinja2 import TemplateSyntaxError
 
 
-_tag_re = re.compile(r'(?:<(/?)([a-zA-Z0-9_-]+)\s*|(>\s*))(?s)')
+_tag_re = re.compile(r'<(/?)([a-zA-Z0-9_-]+)|(\s*>)', re.S)
 _ws_normalize_re = re.compile(r'[ \t\r\n]+')
+_ws_linewrap_re = re.compile(r'^\s*\n\s*|\s*\n\s*$')
 
 
 class StreamProcessContext(object):
@@ -93,26 +94,31 @@ class HTMLCompress(Extension):
                 break
 
     def normalize(self, ctx):
+        def normalize(value, keep_linewrap = True):
+            if not self.is_isolated(ctx.stack):
+                value = _ws_linewrap_re.sub(' ' if keep_linewrap else '', value)
+                value = _ws_normalize_re.sub(' ', value)
+            return value
+
         pos = 0
         buffer = []
-        def write_data(value, strip = str.strip):
-            if not self.is_isolated(ctx.stack):
-                if strip is not None: value = strip(value)
-                value = _ws_normalize_re.sub(' ', value)
-            buffer.append(value)
-
         for match in _tag_re.finditer(ctx.token.value):
             closes, tag, sole = match.groups()
-            preamble = ctx.token.value[pos:match.start()]
-            write_data(preamble, str.strip if pos > 0 else str.rstrip)
+            preamble = ctx.token.value[pos : match.start()]
             if sole:
-                write_data(sole)
+                preamble = preamble.rstrip()
+                preamble = _ws_normalize_re.sub(' ', preamble)
+            elif not self.is_isolated(ctx.stack):
+                preamble = normalize(preamble, pos == 0)
+            buffer.append(preamble)
+            if sole:
+                buffer.append(sole.strip())
             else:
                 buffer.append(match.group())
                 (closes and self.leave_tag or self.enter_tag)(tag, ctx)
             pos = match.end()
 
-        write_data(ctx.token.value[pos:], str.lstrip if pos > 0 else None)
+        buffer.append(normalize(ctx.token.value[pos:], pos > 0))
         return u''.join(buffer)
 
     def filter_stream(self, stream):

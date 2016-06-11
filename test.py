@@ -15,10 +15,16 @@ def test():
               document.write('Foo < Bar');
             }
           </script>
-          <body>
+          <body >
             <li><a href="{{ href }}">{{ title }}</a><br>Test   Foo
             <li><a href="{{ href }}">{{ title }}</a><img src=test.png>
-          </body>
+            <li{% if True %} class="active"{% endif %} >Active item</li>
+            <p>
+                This page has been moved <a href="{{url}}">here</a>
+                {{- ' permenantly' if status == 301 else '' -}}
+                .
+            </p>
+          </body >
         </html>
     ''')
     print(tmpl.render(title=42, href='index.html'))
@@ -26,7 +32,7 @@ def test():
     env = Environment(extensions=[SelectiveHTMLCompress])
     tmpl = env.from_string('''
         Normal   <span>  unchanged </span> stuff
-        {% strip %}Stripped <span class=foo  >   test   </span>
+        {% strip %}Stripped <span class=foo   id=bar  >   test   </span>
         <a href="foo">  test </a> {{ foo }}
         Normal <stuff>   again {{ foo }}  </stuff>
         <p>
