@@ -15,23 +15,13 @@ from jinja2.ext import Extension
 from jinja2.lexer import Token, describe_token
 from jinja2 import TemplateSyntaxError
 
-
 _tag_re = re.compile(r'<(/?)([a-zA-Z0-9_-]+)|(\s*>)', re.S)
 _ws_normalize_re = re.compile(r'[ \t\r\n]+')
 _ws_linewrap_re = re.compile(r'^\s*\n\s*|\s*\n\s*$')
 
-
-class StreamProcessContext(object):
-
-    def __init__(self, stream):
-        self.stream = stream
-        self.token = None
-        self.stack = []
-
-    def fail(self, message):
-        raise TemplateSyntaxError(message, self.token.lineno,
-                                  self.stream.name, self.stream.filename)
-
+class CompressError(Exception):
+    def __init__(self, message):
+        self.message = message
 
 def _make_dict_from_listing(listing):
     rv = {}
@@ -40,8 +30,7 @@ def _make_dict_from_listing(listing):
             rv[key] = value
     return rv
 
-
-class HTMLCompress(Extension):
+class Compressor:
     isolated_elements = set(['script', 'style', 'noscript', 'textarea'])
     void_elements = set([
         'br', 'img', 'area', 'hr', 'param', 'input', 'embed', 'col',
@@ -61,6 +50,8 @@ class HTMLCompress(Extension):
         (['thead', 'tbody', 'tfoot'], set(['thead', 'tbody', 'tfoot'])),
         (['dd', 'dt'], set(['dl', 'dt', 'dd']))
     ])
+    def __init__(self):
+        self.stack = []
 
     def is_isolated(self, stack):
         for tag in reversed(stack):
@@ -73,69 +64,75 @@ class HTMLCompress(Extension):
         return breaking and (tag in breaking or
             ('#block' in breaking and tag in self.block_elements))
 
-    def enter_tag(self, tag, ctx):
-        while ctx.stack and self.is_breaking(tag, ctx.stack[-1]):
-            self.leave_tag(ctx.stack[-1], ctx)
+    def enter_tag(self, tag):
+        while self.stack and self.is_breaking(tag, self.stack[-1]):
+            self.leave_tag(self.stack[-1])
         if tag not in self.void_elements:
-            ctx.stack.append(tag)
+            self.stack.append(tag)
 
-    def leave_tag(self, tag, ctx):
-        if not ctx.stack:
-            ctx.fail('Tried to leave "%s" but something closed '
+    def leave_tag(self, tag):
+        if not self.stack:
+            raise CompressError('Tried to leave "%s" but something closed '
                      'it already' % tag)
-        if tag == ctx.stack[-1]:
-            ctx.stack.pop()
+        if tag == self.stack[-1]:
+            self.stack.pop()
             return
-        for idx, other_tag in enumerate(reversed(ctx.stack)):
+        for idx, other_tag in enumerate(reversed(self.stack)):
             if other_tag == tag:
                 for num in range(idx + 1):
-                    ctx.stack.pop()
+                    self.stack.pop()
             elif not self.breaking_rules.get(other_tag):
                 break
 
-    def normalize(self, ctx):
+    def compress(self, value):
         def normalize(value, keep_linewrap = True):
-            if not self.is_isolated(ctx.stack):
+            if not self.is_isolated(self.stack):
                 value = _ws_linewrap_re.sub(' ' if keep_linewrap else '', value)
                 value = _ws_normalize_re.sub(' ', value)
             return value
-
         pos = 0
-        buffer = []
-        for match in _tag_re.finditer(ctx.token.value):
+        buf = []
+        for match in _tag_re.finditer(value):
             closes, tag, sole = match.groups()
-            preamble = ctx.token.value[pos : match.start()]
+            preamble = value[pos : match.start()]
             if sole:
                 preamble = preamble.rstrip()
                 preamble = _ws_normalize_re.sub(' ', preamble)
-            elif not self.is_isolated(ctx.stack):
-                preamble = normalize(preamble, pos == 0)
-            buffer.append(preamble)
-            if sole:
-                buffer.append(sole.strip())
             else:
-                buffer.append(match.group())
-                (closes and self.leave_tag or self.enter_tag)(tag, ctx)
+                preamble = normalize(preamble, pos == 0)
+            buf.append(preamble)
+            if sole:
+                buf.append(sole.strip())
+            else:
+                buf.append(match.group())
+                (self.leave_tag if closes else self.enter_tag)(tag)
             pos = match.end()
 
-        buffer.append(normalize(ctx.token.value[pos:], pos > 0))
-        return u''.join(buffer)
+        buf.append(normalize(value[pos:], pos > 0))
+        return u''.join(buf)
+
+class HTMLCompress(Extension):
+    def fail(self, message, stream, token):
+        raise TemplateSyntaxError(message, token.lineno,
+                stream.name, stream.filename)
 
     def filter_stream(self, stream):
-        ctx = StreamProcessContext(stream)
+        compressor = Compressor()
         for token in stream:
             if token.type != 'data':
                 yield token
                 continue
-            ctx.token = token
-            value = self.normalize(ctx)
-            yield Token(token.lineno, 'data', value)
+            try:
+                value = compressor.compress(token.value)
+            except CompressError as e:
+                self.fail(e.message, stream, token)
+            else:
+                yield Token(token.lineno, 'data', value)
 
 
 class SelectiveHTMLCompress(HTMLCompress):
-
     def filter_stream(self, stream):
-        ctx = StreamProcessContext(stream)
+        compressor = Compressor()
         strip_depth = 0
         while 1:
             if stream.current.type == 'block_begin':
@@ -147,16 +144,20 @@ class SelectiveHTMLCompress(HTMLCompress):
                     else:
                         strip_depth -= 1
                         if strip_depth < 0:
-                            ctx.fail('Unexpected tag endstrip')
+                            self.fail('Unexpected tag endstrip', stream, token)
                     stream.skip()
                     if stream.current.type != 'block_end':
-                        ctx.fail('expected end of block, got %s' %
-                                 describe_token(stream.current))
+                        self.fail('expected end of block, got %s' %
+                                 describe_token(stream.current), stream, token)
                     stream.skip()
             if strip_depth > 0 and stream.current.type == 'data':
-                ctx.token = stream.current
-                value = self.normalize(ctx)
-                yield Token(stream.current.lineno, 'data', value)
+                token = stream.current
+                try:
+                    value = compressor.compress(token.value)
+                except CompressError as e:
+                    self.fail(e.message, stream, token)
+                else:
+                    yield Token(stream.current.lineno, 'data', value)
             else:
                 yield stream.current
             next(stream)
