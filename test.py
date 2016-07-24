@@ -16,6 +16,9 @@ def test():
             }
           </script>
           <body >
+            <pre>
+                Hello world
+            </pre>
             <li><a href="{{ href }}">{{ title }}</a><br>Test   Foo
             <li><a href="{{ href }}">{{ title }}</a><img src=test.png>
             <li{% if True %} class="active"{% endif %} >Active item</li>

@@ -31,7 +31,7 @@ def _make_dict_from_listing(listing):
     return rv
 
 class Compressor:
-    isolated_elements = set(['script', 'style', 'noscript', 'textarea'])
+    isolated_elements = set(['script', 'style', 'noscript', 'textarea', 'pre'])
     void_elements = set([
         'br', 'img', 'area', 'hr', 'param', 'input', 'embed', 'col',
         'meta', 'link',
@@ -40,7 +40,7 @@ class Compressor:
         'div', 'p', 'form', 'ul', 'ol', 'li', 'table', 'tr',
         'tbody', 'thead', 'tfoot', 'tr', 'td', 'th', 'dl',
         'dt', 'dd', 'blockquote', 'h1', 'h2', 'h3', 'h4',
-        'h5', 'h6', 'pre',
+        'h5', 'h6',
     ])
     breaking_rules = _make_dict_from_listing([
         (['p'], set(['#block'])),
